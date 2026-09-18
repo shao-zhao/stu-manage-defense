@@ -11,11 +11,19 @@ function Report([string]$Label, [bool]$Ok, [string]$Detail) {
 
 $allOk = $true
 $javaVersion = (& java -version 2>&1 | Select-Object -First 1)
-$allOk = (Report 'Java' ($LASTEXITCODE -eq 0) $javaVersion) -and $allOk
+$javaMajor = if ($javaVersion -match 'version "(\d+)') { [int]$Matches[1] } else { 0 }
+$allOk = (Report 'Java 17+' ($LASTEXITCODE -eq 0 -and $javaMajor -ge 17) $javaVersion) -and $allOk
 $nodeVersion = (& node --version 2>$null)
-$allOk = (Report 'Node.js' ($LASTEXITCODE -eq 0) $nodeVersion) -and $allOk
+try { $nodeParsed = [version]$nodeVersion.TrimStart('v'); $nodeOk = (($nodeParsed.Major -eq 22 -and $nodeParsed.Minor -ge 18) -or $nodeParsed.Major -ge 24) } catch { $nodeOk = $false }
+$allOk = (Report 'Node.js (22.18+ or 24.12+)' $nodeOk $nodeVersion) -and $allOk
 $dockerVersion = (& docker version --format '{{.Server.Version}}' 2>$null)
-$allOk = (Report 'Docker daemon' ($LASTEXITCODE -eq 0) $dockerVersion) -and $allOk
+$dockerOk = $LASTEXITCODE -eq 0
+if (-not $dockerOk) {
+    $portableRedis = Test-Path (Join-Path $root 'runtime/redis/Redis-8.10.2-Windows-x64-cygwin/redis-server.exe')
+    $dockerOk = $portableRedis
+    $dockerVersion = if ($portableRedis) { 'unavailable; portable Redis fallback installed' } else { 'unavailable' }
+}
+$allOk = (Report 'Docker daemon or Redis fallback' $dockerOk $dockerVersion) -and $allOk
 
 $mysqlPort = Test-NetConnection -ComputerName '127.0.0.1' -Port 3306 -InformationLevel Quiet -WarningAction SilentlyContinue
 $allOk = (Report 'MySQL port 3306' $mysqlPort 'local connection') -and $allOk

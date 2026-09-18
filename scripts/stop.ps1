@@ -18,7 +18,15 @@ if (Test-Path $pidFile) {
 }
 
 if ($WithRedis) {
-    docker compose -f (Join-Path $root 'compose.yaml') stop redis
-    if ($LASTEXITCODE -ne 0) { throw 'Redis could not be stopped.' }
-    Write-Host 'Stopped Redis; its named volume remains intact.'
+    $portablePid = Join-Path $root 'runtime/redis.pid'
+    if (Test-Path $portablePid) {
+        $id = [int](Get-Content -Raw $portablePid)
+        if (Get-Process -Id $id -ErrorAction SilentlyContinue) { Stop-Process -Id $id -Force }
+        Remove-Item -LiteralPath $portablePid -Force
+        Write-Host 'Stopped portable Redis; its local AOF data remains intact.'
+    } else {
+        docker compose -f (Join-Path $root 'compose.yaml') stop redis
+        if ($LASTEXITCODE -ne 0) { throw 'Redis could not be stopped.' }
+        Write-Host 'Stopped Redis; its named volume remains intact.'
+    }
 }

@@ -2,7 +2,7 @@
 
 ## 0:00–0:35：项目目标与架构
 
-“这是一个面向学校日常教学流程的学生管理系统。它不是单一的信息展示页面，而是把管理员、教师、学生三类角色的权限和业务串成一条闭环。前端使用 Vue 3、TypeScript、Element Plus 和 ECharts；后端使用 Spring Boot、MyBatis-Plus、MySQL。Redis 负责真实缓存，通知使用基于 HTTP 长连接的服务端推送 SSE。”
+“这是一个面向学校日常教学流程的学生管理系统。它不是单一的信息展示页面，而是把管理员、教师、学生三类角色的权限和业务串成一条闭环。前端使用 Vue 3、TypeScript、Element Plus 和 ECharts；后端使用 Spring Boot 和 MySQL，核心业务服务用 JdbcTemplate 直写清晰的事务 SQL，同时保留 MyBatis-Plus 依赖。Redis 负责真实缓存，通知使用基于 HTTP 长连接的服务端推送 SSE。”
 
 ## 0:35–1:20：管理员端
 

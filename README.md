@@ -11,9 +11,9 @@
 
 ## 本地运行
 
-前提：MySQL 8（本机 3306）、Java 17+、Node.js、Docker Desktop。Redis 由 Compose 在 **127.0.0.1:6379** 启动，未暴露到局域网或公网。
+前提：MySQL 8（本机 3306）、Java 17+、Node.js 22.18+ 或 24.12+。Redis 优先由 Docker Compose 在 **127.0.0.1:6379** 启动；Docker 不可用时，启动脚本使用校验过的本机 portable Redis，同样只绑定回环地址。
 
-1. 复制 `.env.example` 为 `.env`，填写 `MYSQL_PASSWORD` 和一个足够长的 `JWT_SECRET`。`.env` 不会提交。
+1. 复制 `.env.example` 为 `.env`，填写 `MYSQL_PASSWORD`。`.env` 不会提交。后端首次启动会在本机生成 `jwt-secret.local`，无需把 JWT 密钥写进 `.env`。
 2. 确认 MySQL 可用。应用使用独立数据库 `stu_manage`，不会修改旧的 `stu` 数据库。
 3. 在项目根目录运行：
 
@@ -22,7 +22,7 @@
 ./scripts/check-environment.ps1 -WaitForApplications
 ```
 
-前端默认地址为 `http://127.0.0.1:5173`，后端为 `http://127.0.0.1:9090`。首次后端启动会执行 `stu-backend/sql/schema.sql` 创建表及演示数据。
+前端默认地址为 `http://127.0.0.1:5173`，后端为 `http://127.0.0.1:9090`。首次后端启动会执行 `stu-backend/src/main/resources/schema.sql` 创建表及演示数据。
 
 演示账号均为初始密码 `123456`：`admin`（ADMIN）、`teacher01`（TEACHER）和 `student01`（STUDENT）。演示结束后可从系统内修改密码。
 
@@ -33,7 +33,7 @@
 ./scripts/stop.ps1 -WithRedis
 ```
 
-`start.ps1` 将前后端放在隐藏后台进程中，并记录在 `runtime/`；为 Java 26 的 Windows 临时 Unix-domain socket 问题传入项目内的绝对临时目录。日志位于 `runtime/logs/`，均不纳入版本控制。
+`start.ps1` 会在新克隆项目中自动执行 `npm ci`，将前后端放在隐藏后台进程中，并等待健康检查成功；进程记录在 `runtime/`。它为 Java 26 的 Windows 临时 Unix-domain socket 问题传入后端 `target/socket-tmp` 的绝对临时目录。日志位于 `runtime/logs/`，均不纳入版本控制。
 
 ## 验收与答辩材料
 
@@ -50,7 +50,7 @@
 ## 项目结构
 
 ```text
-stu-backend/    Spring Boot 4.1.1 + MyBatis-Plus + MySQL
+stu-backend/    Spring Boot 4.1.1 + MySQL（核心业务服务使用 JdbcTemplate；保留 MyBatis-Plus 依赖）
 stu-frontend/   Vue 3 + TypeScript + Vite + Element Plus + ECharts
 scripts/        启动、停止、环境检查与端到端 smoke 测试
 docs/           答辩稿、验证记录、评分依据
@@ -59,4 +59,6 @@ compose.yaml    仅本机 Redis（持久化命名卷、回环地址绑定）
 
 ## 安全与运行边界
 
-仓库不包含真实数据库密码、JWT 密钥、上传文件、运行日志、构建产物或嵌套 Git 历史。`application-example.properties` 与 `.env.example` 仅包含占位值。上传接口验证类型和大小，凭据不会出现在 API 响应中。
+仓库不包含真实数据库密码、JWT 密钥、上传文件、运行日志、构建产物、portable Redis 二进制或嵌套 Git 历史。`application-example.properties` 与 `.env.example` 仅包含占位值。上传接口验证类型和大小，凭据不会出现在 API 响应中。
+
+日常开发在本目录 `stu-manage` 完成。`stu-manage-defense` 仅是排除嵌套 Git 历史与本地数据后的 GitHub 整合发布目录；请勿在两个目录之间混合运行服务。
