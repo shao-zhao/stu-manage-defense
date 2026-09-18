@@ -5,8 +5,10 @@
 **/application-local.properties
 **/application-local.yml
 **/application-local.yaml
+**/*.local
+**/jwt-secret.local
 
-# Generated data
+# Runtime data and generated outputs
 runtime/
 logs/
 uploads/
@@ -14,6 +16,8 @@ uploads/
 **/target/
 **/node_modules/
 **/dist/
+
+# IDE files
 .idea/
 .vscode/
 *.iml
