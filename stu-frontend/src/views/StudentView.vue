@@ -1,196 +1,206 @@
-<template>
-  <div>{{ queryCondition }}</div>
-  <el-form inline>
-    <el-form-item label="姓名">
-      <el-input v-model="queryCondition.nameLike"></el-input>
-    </el-form-item>
-    <el-form-item label="手机号">
-      <el-input v-model="queryCondition.phoneStart"></el-input>
-    </el-form-item>
-    <el-form-item>
-      <el-button type="primary" @click="query">search</el-button>
-    </el-form-item>
-    <el-form-item>
-      <el-button type="success" @click="insertVisible = true">add</el-button>
-    </el-form-item>
-  </el-form>
-
-  <div>{{ result }}</div>
-  <el-table :data="result">
-    <el-table-column type="selection"></el-table-column>
-    <el-table-column prop="id" label="id"></el-table-column>
-    <el-table-column prop="grade" label="grade"></el-table-column>
-    <el-table-column prop="name" label="name"></el-table-column>
-    <el-table-column prop="earnCredits" label="earnCredits"></el-table-column>
-    <el-table-column prop="phone" label="phone"></el-table-column>
-    <el-table-column label="好看的学分">
-      <template #default="{ row }">
-        <el-tag :type="mapCredits[row.earnCredits]">{{ row.earnCredits }}</el-tag>
-      </template>
-    </el-table-column>
-    <el-table-column>
-      <template #default="{ row }">
-        <el-button size="small" type="warning" @click="modify(row.id)">修改</el-button>
-        <el-button size="small" type="danger" @click="remove(row.id)">删除</el-button>
-      </template>
-    </el-table-column>
-  </el-table>
-  <el-dialog v-model="insertVisible">
-    <div>新增{{ insertStudent }}</div>
-    <el-form label-width="auto" style="width: 500px">
-      <el-form-item label="name">
-        <el-input v-model="insertStudent.name"></el-input>
-      </el-form-item>
-      <el-form-item label="grade">
-        <el-select v-model="insertStudent.grade">
-          <el-option label="计科1班" value="1"></el-option>
-          <el-option label="计科2班" value="2"></el-option>
-          <el-option label="计科3班" value="3"></el-option>
-        </el-select>
-      </el-form-item>
-      <el-form-item label="phone">
-        <el-input v-model="insertStudent.phone"></el-input>
-      </el-form-item>
-    </el-form>
-    <el-button type="primary" @click="insertSave">保存 真正新增</el-button>
-  </el-dialog>
-  <!-- 修改使用独立表单；取消时丢弃副本，不改动表格里的原始对象。 -->
-  <el-dialog v-model="modifyVisible">
-    <div>修改页面</div>
-    <el-form label-width="auto" style="width: 500px">
-      <el-form-item label="name">
-        <el-input v-model="modifyStudent.name"></el-input>
-      </el-form-item>
-      <el-form-item label="grade">
-        <el-select v-model="modifyStudent.grade">
-          <el-option label="计科1班" value="1"></el-option>
-          <el-option label="计科2班" value="2"></el-option>
-          <el-option label="计科3班" value="3"></el-option>
-        </el-select>
-      </el-form-item>
-      <el-form-item label="phone">
-        <el-input v-model="modifyStudent.phone"></el-input>
-      </el-form-item>
-    </el-form>
-    <el-button type="primary" @click="modifySave">保存 真正新增</el-button>
-  </el-dialog>
-</template>
-
 <script setup lang="ts">
-import { ref, onMounted, onBeforeMount } from 'vue'
-import request from '@/util/request.ts'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
-import { isAxiosError } from 'axios'
-
-type StudentEditForm = {
-  id: number
-  name: string
-  grade: string
-  phone: string
-}
-
-const editVisible = ref(false)
-const modifyVisible = ref(false)
-
-const editStudent = ref<StudentEditForm>({ id: 0, name: '', grade: '', phone: '' })
-
-const openEdit = (row: StudentEditForm) => {
-  // 创建新对象。若直接赋值为 row，输入框会立刻修改表格中的同一个对象。
-  editStudent.value = {
-    id: row.id,
-    name: row.name ?? '',
-    grade: row.grade ?? '',
-    phone: row.phone ?? '',
+import { onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus'
+import { Download, Plus, Upload } from '@element-plus/icons-vue'
+import PageHeader from '@/components/PageHeader.vue'
+import { api, download } from '@/util/request'
+import type { Student } from '@/types'
+const loading = ref(false),
+  total = ref(0),
+  records = ref<Student[]>([]),
+  dialog = ref(false),
+  editing = ref(false)
+const query = reactive({ page: 1, size: 10, keyword: '', status: '' })
+const empty = () => ({
+  id: 0,
+  studentNo: '',
+  name: '',
+  gender: '男',
+  phone: '',
+  department: '',
+  major: '',
+  className: '',
+  enrollmentYear: new Date().getFullYear(),
+  status: 'ENABLED',
+})
+const form = reactive(empty())
+async function load() {
+  loading.value = true
+  try {
+    const x = await api<{ records: Student[]; total: number }>({
+      url: '/api/students',
+      params: query,
+    })
+    records.value = x.records
+    total.value = x.total
+  } finally {
+    loading.value = false
   }
-  editVisible.value = true
 }
-
-const mapCredits: Record<number, string> = {
-  11: 'success',
-  1: 'warning',
+function search() {
+  query.page = 1
+  load()
 }
-const queryCondition = ref({
-  nameLike: '',
-  phoneStart: '',
-})
-const result = ref([
-  {
-    earnCredits: 0,
-    grade: '',
-    id: 1,
-    name: '',
-    phone: '',
-  },
-])
-const query = async () => {
-  const res = await request({
-    method: 'post',
-    url: '/api/student/queryEX',
-    data: queryCondition.value,
+function open(row?: Student) {
+  Object.assign(form, row ? { ...row } : empty())
+  editing.value = !!row
+  dialog.value = true
+}
+async function save() {
+  if (!form.name || !form.department || !form.major || !form.className) {
+    ElMessage.warning('请补全必填信息')
+    return
+  }
+  await api({
+    url: editing.value ? `/api/students/${form.id}` : '/api/students',
+    method: editing.value ? 'PUT' : 'POST',
+    data: form,
   })
-  console.log(res)
-  result.value = res.data
+  dialog.value = false
+  ElMessage.success('已保存')
+  load()
 }
-onMounted(async () => {
-  //ElMessage.warning("自动运行")
-  //帮用户点击
-  await query()
-})
-const insertStudent = ref({
-  id: 0,
-  name: '',
-  grade: '1',
-  phone: '0',
-  earnCredits: 0,
-})
-const insertVisible = ref(false)
-const insertSave = async () => {
-  const res = await request({
-    url: '/api/student/insert',
-    method: 'post',
-    data: insertStudent.value,
-  })
-  // 帮用户关窗口
-  insertVisible.value = false
-  // 帮用户刷新
-  await query()
+async function state(row: Student) {
+  const status = row.status === 'ENABLED' ? 'FROZEN' : 'ENABLED'
+  await ElMessageBox.confirm(`确认${status === 'FROZEN' ? '冻结' : '启用'} ${row.name} 的账号？`)
+  await api({ url: `/api/students/${row.id}/status`, method: 'PUT', data: { status } })
+  load()
 }
-const remove = async (id: number) => {
-  await ElMessageBox.confirm('确认删除')
-  const res = await request({
-    method: 'delete',
-    url: '/api/student/removeById/' + id,
-  })
-  await query()
+async function reset(row: Student) {
+  await ElMessageBox.confirm(`确认重置 ${row.name} 的密码？`)
+  await api({ url: `/api/students/${row.id}/reset-password`, method: 'POST' })
+  ElMessage.success('密码已重置为初始密码')
 }
-const modifyStudent = ref({
-  id: 0,
-  name: '',
-  grade: '1',
-  phone: '0',
-  earnCredits: 0,
-})
-const modify = async (id: number) => {
-  modifyVisible.value = true
-  ElMessage.success('将要修改' + id)
-
-  const res = await request({
-    url: '/api/student/findById/' + id,
-    method: 'get',
-  })
-  modifyStudent.value = res.data
+async function upload({ file }: UploadRequestOptions) {
+  const data = new FormData()
+  data.append('file', file)
+  await api({ url: '/api/students/import', method: 'POST', data })
+  ElMessage.success('导入成功')
+  load()
 }
-
-const modifySave = async () => {
-  const res = await request({
-    url: '/api/student/modify',
-    method: 'put',
-    data: modifyStudent.value,
-  })
-  modifyVisible.value = false
-  await query();
-}
+onMounted(load)
 </script>
-
-<style scoped></style>
+<template>
+  <div class="page">
+    <PageHeader title="学生管理" description="维护学生档案、账号状态与学业基础信息"
+      ><div class="actions">
+        <el-upload :http-request="upload" :show-file-list="false" accept=".xlsx"
+          ><el-button :icon="Upload">导入名单</el-button></el-upload
+        ><el-button
+          :icon="Download"
+          @click="download('/api/students/template', '学生导入模板.xlsx')"
+          >模板</el-button
+        ><el-button :icon="Download" @click="download('/api/students/export', '学生名单.xlsx')"
+          >导出</el-button
+        ><el-button type="primary" :icon="Plus" @click="open()">新增学生</el-button>
+      </div></PageHeader
+    >
+    <section class="surface section-card">
+      <div class="table-toolbar">
+        <div class="form-inline">
+          <el-input
+            v-model="query.keyword"
+            clearable
+            placeholder="按姓名或学号搜索"
+            @keyup.enter="search"
+          /><el-select
+            v-model="query.status"
+            clearable
+            placeholder="账号状态"
+            @change="search"
+            ><el-option label="正常" value="ENABLED" /><el-option
+              label="冻结"
+              value="FROZEN" /><el-option label="暂停" value="SUSPENDED" /></el-select
+          ><el-button
+            type="primary"
+            @click="search"
+            >查询</el-button
+          >
+        </div>
+      </div>
+      <el-table :data="records" v-loading="loading" stripe
+        ><el-table-column prop="studentNo" label="学号" min-width="110" /><el-table-column
+          prop="name"
+          label="姓名"
+          min-width="90"
+        /><el-table-column prop="department" label="院系" min-width="120" /><el-table-column
+          prop="major"
+          label="专业"
+          min-width="110"
+        /><el-table-column prop="className" label="班级" min-width="100" /><el-table-column
+          label="学业情况"
+          min-width="130"
+          ><template #default="{ row }"
+            >{{ row.earnedCredits }}/{{ row.requiredCredits }} 学分 · GPA {{ row.gpa }}</template
+          ></el-table-column
+        ><el-table-column label="状态" width="90"
+          ><template #default="{ row }"
+            ><el-tag :type="row.status === 'ENABLED' ? 'success' : 'warning'">{{
+              row.status === 'ENABLED' ? '正常' : row.status === 'FROZEN' ? '冻结' : '暂停'
+            }}</el-tag></template
+          ></el-table-column
+        ><el-table-column fixed="right" label="操作" width="190"
+          ><template #default="{ row }"
+            ><el-button link type="primary" @click="open(row)">编辑</el-button
+            ><el-button link @click="state(row)">{{
+              row.status === 'ENABLED' ? '冻结' : '启用'
+            }}</el-button
+            ><el-button link type="danger" @click="reset(row)">重置密码</el-button></template
+          ></el-table-column
+        ><template #empty><div class="empty">没有找到学生记录</div></template></el-table
+      ><el-pagination
+        class="pager"
+        layout="total, prev, pager, next"
+        v-model:current-page="query.page"
+        :page-size="query.size"
+        :total="total"
+        @current-change="load"
+      />
+    </section>
+    <el-dialog v-model="dialog" :title="editing ? '编辑学生' : '新增学生'"
+      ><el-form label-width="85px"
+        ><div class="grid">
+          <el-form-item label="姓名"><el-input v-model="form.name" /></el-form-item
+          ><el-form-item label="性别"
+            ><el-select v-model="form.gender"
+              ><el-option label="男" value="男" /><el-option
+                label="女"
+                value="女" /></el-select></el-form-item
+          ><el-form-item label="院系"><el-input v-model="form.department" /></el-form-item
+          ><el-form-item label="专业"><el-input v-model="form.major" /></el-form-item
+          ><el-form-item label="班级"><el-input v-model="form.className" /></el-form-item
+          ><el-form-item label="联系电话"><el-input v-model="form.phone" /></el-form-item
+          ><el-form-item label="入学年份"
+            ><el-input-number v-model="form.enrollmentYear" :min="2000" :max="2100"
+          /></el-form-item></div></el-form
+      ><template #footer
+        ><el-button @click="dialog = false">取消</el-button
+        ><el-button type="primary" @click="save">保存</el-button></template
+      ></el-dialog
+    >
+  </div>
+</template>
+<style scoped>
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pager {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+  .actions {
+    width: 100%;
+  }
+}
+</style>

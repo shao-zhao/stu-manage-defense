@@ -1,30 +1,64 @@
-import axios from 'axios'
+import axios, { type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
-const instance=axios.create({
-  baseURL:"http://localhost:9090"
+
+export type ApiEnvelope<T> = { code: 202 | 505; message: string; data: T }
+const request = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:9090',
 })
-//携带token
-instance.interceptors.request.use((config)=>{
-  const token = localStorage.getItem("token")
-  if(token){
-    config.headers.Authorization = token;
-  }
+request.interceptors.request.use((config) => {
+  const token = localStorage.getItem('stu_manage_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
-// axios 拦截器 处理请求token 与返回值
-instance.interceptors.response.use(
-  (res)=>{
-    if (res.data.code === 202) {
-      // 拆一层包裹
-      return res.data
-    }
-    if(res.data.code === 505){
-      ElMessage.warning("业务异常:"+res.data.message)
-      return Promise.reject(new Error(res.data.message));
-    }
-    return res;
+request.interceptors.response.use(
+  (response) => {
+    if (response.config.responseType === 'blob') return response
+    const body = response.data as ApiEnvelope<unknown>
+    if (body?.code === 202) return response
+    const message = body?.message || '请求未能完成，请稍后重试'
+    ElMessage.error(message)
+    return Promise.reject(new Error(message))
   },
-  (err)=>{
-    return Promise.reject(err)
-  })
-export default instance;
+  (error) => {
+    const status = error.response?.status
+    const isLoginRequest = error.config?.url === '/api/auth/login'
+    const message =
+      status === 401
+        ? isLoginRequest
+          ? '账号、密码或登录身份不正确'
+          : '登录已失效，请重新登录'
+        : status === 403
+          ? '没有权限执行此操作'
+          : error.response?.data?.message || '网络连接异常，请稍后重试'
+    if (status === 401 && !isLoginRequest) {
+      localStorage.removeItem('stu_manage_token')
+      localStorage.removeItem('stu_manage_user')
+      if (!window.location.pathname.startsWith('/login')) {
+        const redirect = encodeURIComponent(window.location.pathname)
+        window.location.replace(`/login?redirect=${redirect}`)
+      }
+    }
+    ElMessage.error(message)
+    return Promise.reject(new Error(message))
+  },
+)
+export async function api<T>(config: AxiosRequestConfig): Promise<T> {
+  const response = await request.request<ApiEnvelope<T>>(config)
+  return response.data.data
+}
+export async function download(url: string, filename: string) {
+  const response = await request.get(url, { responseType: 'blob' })
+  const blob = new Blob([response.data])
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+
+/** Convert backend static paths such as /uploads/demo.mp4 into browser URLs. */
+export function assetUrl(url: string) {
+  if (/^https?:\/\//i.test(url)) return url
+  return `${request.defaults.baseURL}${url.startsWith('/') ? url : `/${url}`}`
+}
+export default request

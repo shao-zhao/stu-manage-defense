@@ -1,6 +1,6 @@
 <script setup lang="ts">
-const go = () =>{
-  window.alert("点击了")
+const go = () => {
+  window.alert('点击了')
 }
 </script>
 
@@ -9,7 +9,7 @@ const go = () =>{
 </template>
 
 <style scoped>
-.core-button{
+.core-button {
   background: darkcyan;
   color: darkorchid;
 }
