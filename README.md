@@ -9,9 +9,19 @@
 - 成绩结果：发布时一次性更新成绩、已获学分和加权 GPA，重复发布不会重复累计。
 - 五项扩展：ECharts 数据看板、Redis 缓存状态、基于 HTTP 长连接的 SSE 通知、Open-Meteo 实时天气、图片/视频上传预览。
 
-## 本地运行
+## 换电脑演示：优先使用便携版
 
-前提：MySQL 8（本机 3306）、Java 17+、Node.js 22.18+ 或 24.12+。Redis 优先由 Docker Compose 在 **127.0.0.1:6379** 启动；Docker 不可用时，启动脚本使用校验过的本机 portable Redis，同样只绑定回环地址。
+在 Windows 10/11 x64 上，将 `stu-manage-portable-windows-x64.zip` **完整解压**到英文目录，例如 `D:\Student Demo\stu-manage-portable`，然后双击 `START.cmd`。启动成功后访问 `http://127.0.0.1:18090`。结束时双击 `STOP.cmd`，等待退出后再复制文件夹或拔出 U 盘。
+
+包内包含 Java 17、MySQL、Redis 和已构建应用，不需要安装 Node.js、Maven、Git，也不需要联网下载依赖。若电脑缺少 VC++ x64 运行库，先运行包内 `runtime/vc_redist.x64.exe`。天气功能需要网络，其他本地业务可以离线演示。目录可含空格，但不能含中文；不要直接在压缩包内运行。
+
+演示账号：`admin`、`teacher01`、`student01`，密码均为 `123456`。便携包首次启动会生成独立演示数据；以后的启动保留修改。数据、上传文件和密钥在包内 `data/`，不要只复制 JAR。
+
+详细步骤、端口冲突排查与备份恢复见 [便携版运行教程](docs/V2-PORTABLE.md)。这里的支持范围是 Windows x64；未宣称已在另一台实体电脑测试。
+
+## 从源码开发运行
+
+前提：MySQL 8（本机 3306）、Java 17、Node.js 22.18+ 或 24.12+。本项目在 Windows 使用 Java 17 验证。Redis 优先由 Docker Compose 在 **127.0.0.1:6379** 启动；Docker 不可用时，启动脚本使用校验过的本机 portable Redis，同样只绑定回环地址。
 
 1. 复制 `.env.example` 为 `.env`，填写 `MYSQL_PASSWORD`。`.env` 不会提交。后端首次启动会在本机生成 `jwt-secret.local`，无需把 JWT 密钥写进 `.env`。
 2. 确认 MySQL 可用。应用使用独立数据库 `stu_manage`，不会修改旧的 `stu` 数据库。
@@ -33,13 +43,15 @@
 ./scripts/stop.ps1 -WithRedis
 ```
 
-`start.ps1` 会在新克隆项目中自动执行 `npm ci`，将前后端放在隐藏后台进程中，并等待健康检查成功；进程记录在 `runtime/`。它为 Java 26 的 Windows 临时 Unix-domain socket 问题传入后端 `target/socket-tmp` 的绝对临时目录。日志位于 `runtime/logs/`，均不纳入版本控制。
+`start.ps1` 会在新克隆项目中自动执行 `npm ci`，将前后端放在隐藏后台进程中，并等待健康检查成功；进程记录在 `runtime/`。日志位于 `runtime/logs/`，均不纳入版本控制。首次从源码运行需要联网安装依赖；离线演示请使用预先构建的便携包。
 
 ## 验收与答辩材料
 
 - [运行与验证记录](docs/TESTING.md)
 - [评分点与可核验依据](docs/SCORING-EVIDENCE.md)
 - [5 分钟演示稿与核心代码讲解](docs/DEFENSE.md)
+- [Redis、SSE 等技术的实际演示步骤](docs/TECH-DEMO.md)
+- [按请求、鉴权、插槽、事务学习代码](docs/LEARNING.md)
 
 完整业务 smoke 测试使用独立、带时间戳的课程记录；它不会重置演示种子：
 

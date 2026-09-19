@@ -54,6 +54,8 @@ if (Test-Path -LiteralPath $zipPath) { throw "Refusing to overwrite existing ZIP
 
 New-Item -ItemType Directory -Force -Path $packageRoot | Out-Null
 Copy-Item -Path (Join-Path $template '*') -Destination $packageRoot -Recurse -Force
+# 离线包同时携带教程，用户无需联网也可查看安装、演示和恢复说明。
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs') -Destination (Join-Path $packageRoot 'docs') -Recurse -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'app'), (Join-Path $packageRoot 'runtime') | Out-Null
 Copy-Item -LiteralPath $JarPath -Destination (Join-Path $packageRoot 'app\stu-manage.jar') -Force
 Copy-Item -LiteralPath $JavaHome -Destination (Join-Path $packageRoot 'runtime\java') -Recurse -Force
@@ -77,6 +79,23 @@ $hashLines = @(
     'Redis upstream ZIP SHA-256: 6de5cc7f5adbf97b5928b13766383d4ad424626ef3d8b313ffff12d820ec6fc1'
 )
 $hashLines | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCES-SHA256.txt') -Encoding UTF8
+
+# 打包前确认离线教程没有在复制过程中遗漏，避免生成可启动但缺少演示说明的半成品。
+$requiredDocs = @(
+    'DEFENSE.md',
+    'LEARNING.md',
+    'REDIS-RUNTIME.md',
+    'SCORING-EVIDENCE.md',
+    'TECH-DEMO.md',
+    'TESTING.md',
+    'V2-PORTABLE.md'
+)
+foreach ($document in $requiredDocs) {
+    $documentPath = Join-Path $packageRoot (Join-Path 'docs' $document)
+    if (-not (Test-Path -LiteralPath $documentPath -PathType Leaf)) {
+        throw "Required offline document was not copied: $documentPath"
+    }
+}
 
 Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
 Write-Host "Created: $zipPath"

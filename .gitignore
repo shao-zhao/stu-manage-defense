@@ -24,6 +24,7 @@ uploads/
 *.log
 
 # Offline-package build inputs/outputs (the reproducible templates are tracked)
-package/out/
+package/out*/
 package/vendor/*.exe
+package/*.pid
 *.zip

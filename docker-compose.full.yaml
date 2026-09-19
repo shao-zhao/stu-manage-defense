@@ -50,7 +50,7 @@ services:
     volumes:
       - app-uploads:/var/lib/stu-manage/uploads
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/actuator/health | grep -q '\"UP\"'"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9090/actuator/health | grep -q '\"UP\"'"]
       interval: 15s
       timeout: 5s
       retries: 10

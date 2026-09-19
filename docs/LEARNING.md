@@ -4,7 +4,7 @@
 
 ## 1. 一次解包 API
 
-位置：[request.ts](../stu-frontend/src/util/request.ts)。后端 JSON 成功响应固定为 `{ code: 202, message, data }`。响应拦截器只接受 `202`，`505` 和 HTTP 错误转换为统一提示与 `Promise.reject`；页面调用 `api<T>` 时只拿到 `data`。
+位置：[request.ts](../stu-frontend/src/util/request.ts)。后端 JSON 成功响应固定为 `{ code: 202, message, data }`。响应拦截器只接受 `202`，`505` 和 HTTP 错误转换为统一提示与 `Promise.reject`，但保留 Axios 的 `response`；页面调用 `api<T>` 时才取出业务 `data`。
 
 ```ts
 export async function api<T>(config: AxiosRequestConfig): Promise<T> {
@@ -46,9 +46,9 @@ if (token) config.headers.Authorization = `Bearer ${token}`
 
 位置：[CoursesView.vue](../stu-frontend/src/views/CoursesView.vue)、`SchoolService.publishCourse`、`closeCourse`、`reopenCourse`、`enroll`。
 
-课程有 `UNPUBLISHED → PUBLISHED → CLOSED` 三种状态。前端在已发布或停开时锁住编号、教师、学分、学时、学期、时间和容量，只允许修改地点、封面、简介；服务端仍会执行同一规则。学生只能看到已发布或停开课程，停开课程保留已有选课但不能新选。
+课程有 `UNPUBLISHED → PUBLISHED → CLOSED` 三种状态。前端在已发布或停开时锁住编号、课程名称、教师、学分、学时、学期、时间和容量，只允许修改地点、封面、简介；服务端仍会执行同一规则。学生只能看到已发布或停开课程，停开课程保留已有选课但不能新选。
 
-选课的关键 SQL 使用 `for update` 锁定该学生的选课记录，随后在同一个事务里复查容量、重复选课和课程状态，再增减 `course.enrolled`。所以两个学生同时点击最后一个名额，也由数据库决定只有一个事务成功。
+选课先用 `for update` 锁定同一门课程行，再锁定该学生的选课记录；随后在同一个事务里复查容量、重复选课和课程状态，再增减 `course.enrolled`。同课的不同学生共享课程锁，所以两个学生同时点击最后一个名额，也由数据库决定只有一个事务成功。
 
 答辩可以这样解释：前端的禁用按钮是提示，事务和行锁才是防超卖的最后边界。
 

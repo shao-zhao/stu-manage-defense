@@ -65,7 +65,7 @@ public class OperationsController {
     if (kind == null) throw new ApiException(400, "仅支持图片或视频");
     if ("image".equals(kind)
         && (!Set.of(".png", ".jpg", ".jpeg", ".gif", ".webp").contains(ext)
-            || ImageIO.read(file.getInputStream()) == null))
+            || !isReadableImage(file)))
       throw new ApiException(400, "图片格式或内容无效");
     if ("video".equals(kind) && !Set.of(".mp4", ".webm", ".mov").contains(ext))
       throw new ApiException(400, "视频格式无效");
@@ -80,6 +80,15 @@ public class OperationsController {
     }
     return Result.success(
         Map.of("url", "/static/" + name, "name", original, "kind", kind, "size", file.getSize()));
+  }
+
+  /** ImageIO 会对损坏的压缩数据抛 IOException；这属于客户端文件错误，应返回 400 而不是 500。 */
+  private boolean isReadableImage(MultipartFile file) {
+    try (InputStream input = file.getInputStream()) {
+      return ImageIO.read(input) != null;
+    } catch (IOException ignored) {
+      return false;
+    }
   }
 
   @GetMapping("/media")
