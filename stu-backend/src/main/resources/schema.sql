@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS media (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, owner_id BIGINT NOT NULL, title VARCHAR(150) NOT NULL, url VARCHAR(255) NOT NULL, kind VARCHAR(16) NOT NULL, course_id BIGINT,
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT fk_media_owner FOREIGN KEY(owner_id) REFERENCES account(id)
 );
+CREATE TABLE IF NOT EXISTS demo_seed_marker (
+ marker VARCHAR(64) PRIMARY KEY, seeded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 INSERT IGNORE INTO account(id,username,password_hash,name,role,status,department,phone) VALUES
  (1,'admin','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','教务管理员','ADMIN','ENABLED','教务处','13800000001'),
  (2,'teacher01','$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','王老师','TEACHER','ENABLED','计算机学院','13800000002'),

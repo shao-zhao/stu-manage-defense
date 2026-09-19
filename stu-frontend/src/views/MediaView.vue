@@ -52,17 +52,29 @@ async function save() {
     ElMessage.warning('请填写标题并上传资料')
     return
   }
-  await api({ url: '/api/media', method: 'POST', data: form })
-  dialog.value = false
-  Object.assign(form, { title: '', url: '', kind: 'image', courseId: undefined })
-  ElMessage.success('资料已发布')
-  load()
+  try {
+    await api({ url: '/api/media', method: 'POST', data: form })
+    dialog.value = false
+    Object.assign(form, { title: '', url: '', kind: 'image', courseId: undefined })
+    ElMessage.success('资料已发布')
+    await load()
+  } catch {
+    // 请求失败时保留标题和已上传文件，便于用户修改后再次提交。
+  }
 }
 async function remove(item: Media) {
-  await ElMessageBox.confirm(`确认删除“${item.title}”？`)
-  await api({ url: `/api/media/${item.id}`, method: 'DELETE' })
-  ElMessage.success('已删除')
-  load()
+  try {
+    await ElMessageBox.confirm(`确认删除“${item.title}”？`)
+  } catch {
+    return
+  }
+  try {
+    await api({ url: `/api/media/${item.id}`, method: 'DELETE' })
+    ElMessage.success('已删除')
+    await load()
+  } catch {
+    // 统一请求层已经提示失败原因，保留当前列表供用户继续操作。
+  }
 }
 onMounted(load)
 </script>

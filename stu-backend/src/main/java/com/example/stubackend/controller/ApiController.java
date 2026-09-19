@@ -9,6 +9,8 @@ import com.example.stubackend.web.ApiException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +19,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RestController
 @RequestMapping("/api")
 public class ApiController {
+  private static final Logger log = LoggerFactory.getLogger(ApiController.class);
+
   private final SchoolService school;
   private final JwtService jwt;
   private final EventHub events;
@@ -159,8 +163,9 @@ public class ApiController {
       HttpServletRequest r,
       @RequestParam(required = false) String keyword,
       @RequestParam(required = false) String semester,
+      @RequestParam(required = false) String status,
       @RequestParam(defaultValue = "false") boolean mine) {
-    return Result.success(school.courses(user(r), keyword, semester, mine));
+    return Result.success(school.courses(user(r), keyword, semester, status, mine));
   }
 
   @PostMapping("/courses")
@@ -179,6 +184,24 @@ public class ApiController {
   @PostMapping("/courses/{id}/publish")
   public Result<Void> publishCourse(HttpServletRequest r, @PathVariable long id) {
     school.publishCourse(user(r), id);
+    return Result.success(null);
+  }
+
+  @DeleteMapping("/courses/{id}")
+  public Result<Void> deleteCourse(HttpServletRequest r, @PathVariable long id) {
+    school.deleteCourse(user(r), id);
+    return Result.success(null);
+  }
+
+  @PostMapping("/courses/{id}/close")
+  public Result<Void> closeCourse(HttpServletRequest r, @PathVariable long id) {
+    school.closeCourse(user(r), id);
+    return Result.success(null);
+  }
+
+  @PostMapping("/courses/{id}/reopen")
+  public Result<Void> reopenCourse(HttpServletRequest r, @PathVariable long id) {
+    school.reopenCourse(user(r), id);
     return Result.success(null);
   }
 
@@ -237,17 +260,31 @@ public class ApiController {
     try {
       String cached = redis.opsForValue().get(key);
       if (cached != null) {
-        Map<String, Object> data = json.readValue(cached, Map.class);
-        data.put("cache", Map.of("backend", "UP", "hit", true, "ttlSeconds", 60));
+        Map<String, Object> data = new LinkedHashMap<>(json.readValue(cached, Map.class));
+        Long ttl = redis.getExpire(key, java.util.concurrent.TimeUnit.SECONDS);
+        data.put("cache", Map.of("backend", "UP", "hit", true, "ttlSeconds", ttl));
         return Result.success(data);
       }
-      Map<String, Object> data = school.dashboard(current, true);
+      Map<String, Object> data = new LinkedHashMap<>(school.dashboard(current, true));
+      data.put("generatedAt", java.time.Instant.now().toString());
       redis.opsForValue().set(key, json.writeValueAsString(data), java.time.Duration.ofSeconds(60));
+      Long ttl = redis.getExpire(key, java.util.concurrent.TimeUnit.SECONDS);
+      data.put("cache", Map.of("backend", "UP", "hit", false, "ttlSeconds", ttl));
       return Result.success(data);
     } catch (Exception e) {
+      // Redis 故障不能阻断首页，但必须留下原因，不能把序列化错误伪装成业务成功。
+      log.warn("Dashboard cache unavailable; serving a fresh database result", e);
       up = false;
     }
-    return Result.success(school.dashboard(current, up));
+    Map<String, Object> data = new LinkedHashMap<>(school.dashboard(current, up));
+    data.put("generatedAt", java.time.Instant.now().toString());
+    return Result.success(data);
+  }
+
+  @GetMapping("/system/status")
+  public Result<Map<String, Object>> systemStatus(HttpServletRequest request) {
+    admin(user(request));
+    return Result.success(school.systemStatus());
   }
 
   @GetMapping("/notifications")

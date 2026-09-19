@@ -100,17 +100,39 @@ public class OperationsController {
 
   @PostMapping("/media")
   @ResponseBody
+  @Transactional
   public Result<Void> addMedia(HttpServletRequest r, @RequestBody Map<String, Object> x) {
     String kind = String.valueOf(x.get("kind"));
     if (!List.of("image", "video").contains(kind)) throw new ApiException(400, "资料类型无效");
+    Object requestedCourseId = x.get("courseId");
+    Long courseId = requestedCourseId == null ? null : parseCourseId(requestedCourseId);
+    if (courseId != null) {
+      // 与课程删除共用行锁，防止删除检查通过后并发插入一条孤立资料。
+      List<Map<String, Object>> courses =
+          db.queryForList("select teacher_id from course where id=? for update", courseId);
+      if (courses.isEmpty()) throw new ApiException(404, "关联课程不存在");
+      if (!user(r).is("ADMIN")
+          && (!user(r).is("TEACHER")
+              || ((Number) courses.get(0).get("teacher_id")).longValue() != user(r).id())) {
+        throw new ApiException(403, "仅任课教师或管理员可关联课程资料");
+      }
+    }
     db.update(
         "insert into media(owner_id,title,url,kind,course_id) values(?,?,?,?,?)",
         user(r).id(),
         required(x, "title"),
         required(x, "url"),
         kind,
-        x.get("courseId"));
+        courseId);
     return Result.success(null);
+  }
+
+  private long parseCourseId(Object value) {
+    try {
+      return Long.parseLong(String.valueOf(value));
+    } catch (NumberFormatException ignored) {
+      throw new ApiException(400, "courseId 必须是数字");
+    }
   }
 
   @DeleteMapping("/media/{id}")

@@ -3,15 +3,18 @@ import { ElMessage } from 'element-plus'
 
 export type ApiEnvelope<T> = { code: 202 | 505; message: string; data: T }
 const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:9090',
+  // 生产环境由 Spring Boot 同源提供页面和接口；本地开发时再交给 Vite 代理。
+  baseURL: import.meta.env.VITE_API_BASE_URL || '',
 })
 request.interceptors.request.use((config) => {
+  // 所有 Axios 业务请求统一补上令牌，页面不需要各自处理鉴权头。
   const token = localStorage.getItem('stu_manage_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
 request.interceptors.response.use(
   (response) => {
+    // 下载响应是二进制，不能按业务信封 code 解包；JSON 失败仍由下面分支提示。
     if (response.config.responseType === 'blob') return response
     const body = response.data as ApiEnvelope<unknown>
     if (body?.code === 202) return response
@@ -43,6 +46,7 @@ request.interceptors.response.use(
   },
 )
 export async function api<T>(config: AxiosRequestConfig): Promise<T> {
+  // 后端成功响应统一为 { code: 202, message, data }，组件只取得业务 data。
   const response = await request.request<ApiEnvelope<T>>(config)
   return response.data.data
 }
@@ -56,9 +60,14 @@ export async function download(url: string, filename: string) {
   URL.revokeObjectURL(link.href)
 }
 
-/** Convert backend static paths such as /uploads/demo.mp4 into browser URLs. */
+/** 将后端返回的 /uploads/demo.mp4 等静态路径转换为当前部署地址。 */
 export function assetUrl(url: string) {
   if (/^https?:\/\//i.test(url)) return url
-  return `${request.defaults.baseURL}${url.startsWith('/') ? url : `/${url}`}`
+  return `${request.defaults.baseURL || ''}${url.startsWith('/') ? url : `/${url}`}`
+}
+
+/** SSE 等原生 fetch 请求也使用同一地址，单端口部署和本地代理都可用。 */
+export function apiUrl(path: string) {
+  return `${request.defaults.baseURL || ''}${path.startsWith('/') ? path : `/${path}`}`
 }
 export default request

@@ -35,6 +35,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
       HttpServletRequest req, HttpServletResponse res, FilterChain chain)
       throws ServletException, IOException {
     try {
+      // 仅把 token 解析和账号版本校验转为 401；后续业务异常必须留给控制器处理。
       String h = req.getHeader("Authorization");
       if (h == null || !h.startsWith("Bearer ")) throw new ApiException(401, "请先登录");
       CurrentUser u = jwt.parse(h.substring(7));

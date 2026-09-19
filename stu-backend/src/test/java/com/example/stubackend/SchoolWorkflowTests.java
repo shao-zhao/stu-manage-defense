@@ -1,9 +1,15 @@
 package com.example.stubackend;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.example.stubackend.security.CurrentUser;
 import com.example.stubackend.service.SchoolService;
+import com.example.stubackend.web.ApiException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,6 +34,94 @@ class SchoolWorkflowTests {
 
   @Autowired SchoolService school;
   @Autowired JdbcTemplate db;
+  @Autowired StringRedisTemplate redis;
+  @Autowired ObjectMapper json;
+
+  @Test
+  void draftCourseCanBeFullyEditedAndDeletedOnlyWithoutRelations() {
+    Map<String, Object> draft = coursePayload("DRAFT" + System.nanoTime(), "可编辑课程");
+    long courseId = ((Number) school.saveCourse(TEACHER, draft, null).get("id")).longValue();
+    try {
+      Map<String, Object> revised = coursePayload("EDIT" + System.nanoTime(), "已完整编辑课程");
+      revised.put("teacherId", 2);
+      Map<String, Object> saved = school.saveCourse(TEACHER, revised, courseId);
+      assertEquals(revised.get("code"), saved.get("code"));
+      assertEquals(revised.get("name"), saved.get("name"));
+
+      db.update(
+          "insert into media(owner_id,title,url,kind,course_id) values(2,'关联资料','/static/test.png','IMAGE',?)",
+          courseId);
+      assertThrows(ApiException.class, () -> school.deleteCourse(TEACHER, courseId));
+      db.update("delete from media where course_id=?", courseId);
+      school.deleteCourse(TEACHER, courseId);
+      assertEquals(0, db.queryForObject("select count(*) from course where id=?", Integer.class, courseId));
+    } finally {
+      db.update("delete from media where course_id=?", courseId);
+      db.update("delete from course where id=?", courseId);
+    }
+  }
+
+  @Test
+  void publishedCourseOnlyChangesDescriptionAndClosedCourseAllowsWithdrawal() {
+    long courseId = createCourse();
+    school.enroll(STUDENT, courseId, false);
+    school.closeCourse(TEACHER, courseId);
+    school.enroll(STUDENT, courseId, true);
+    school.reopenCourse(TEACHER, courseId);
+
+    Map<String, Object> descriptionUpdate = new java.util.LinkedHashMap<>();
+    descriptionUpdate.put("location", "新教室");
+    descriptionUpdate.put("description", "更新的课程说明");
+    descriptionUpdate.put("coverUrl", "/static/course.png");
+    Map<String, Object> saved = school.saveCourse(TEACHER, descriptionUpdate, courseId);
+    assertEquals("新教室", saved.get("location"));
+
+    assertThrows(
+        ApiException.class,
+        () -> school.saveCourse(TEACHER, Map.of("name", "不应修改的核心字段"), courseId));
+    assertThrows(ApiException.class, () -> school.closeCourse(STUDENT, courseId));
+  }
+
+  @Test
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
+  void courseMutationEvictsRealDashboardCacheAfterCommit() {
+    assumeTrue(redisAvailable(), "本机 Redis 未运行时跳过真实缓存集成测试");
+    long courseId = createCourse();
+    String cacheKey = "stu_manage:dashboard:course-test:" + System.nanoTime();
+    try {
+      redis.opsForValue().set(cacheKey, "cached");
+      school.closeCourse(TEACHER, courseId);
+      assertFalse(Boolean.TRUE.equals(redis.hasKey(cacheKey)));
+    } finally {
+      redis.delete(cacheKey);
+      cleanupCourseAndStudents(courseId);
+    }
+  }
+
+  @Test
+  void dashboardsWorkForAllRolesWithOnlyFullGroupByEnabled() {
+    String originalMode = db.queryForObject("select @@session.sql_mode", String.class);
+    db.execute("set session sql_mode='STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY'");
+    try {
+      assertNotNull(school.dashboard(ADMIN, true).get("gradeDistribution"));
+      assertNotNull(school.dashboard(TEACHER, true).get("courseEnrollment"));
+      assertEquals(2, ((List<?>) school.dashboard(STUDENT, true).get("stats")).size());
+    } finally {
+      db.update("set session sql_mode=?", originalMode);
+    }
+  }
+
+  @Test
+  void dashboardPayloadCanBeStoredInRedis() throws Exception {
+    assumeTrue(redisAvailable(), "本机 Redis 未运行时跳过缓存序列化集成测试");
+    String key = "stu_manage:dashboard:serialization-test:" + System.nanoTime();
+    try {
+      redis.opsForValue().set(key, json.writeValueAsString(school.dashboard(ADMIN, true)));
+      assertNotNull(redis.opsForValue().get(key));
+    } finally {
+      redis.delete(key);
+    }
+  }
 
   @Test
   void enrollmentCanWithdrawAndReEnrollBeforeGradesSubmit() {
@@ -87,6 +182,31 @@ class SchoolWorkflowTests {
         code,
         "事务测试课程");
     return db.queryForObject("select id from course where code=?", Long.class, code);
+  }
+
+  private Map<String, Object> coursePayload(String code, String name) {
+    Map<String, Object> payload = new java.util.LinkedHashMap<>();
+    payload.put("code", code);
+    payload.put("name", name);
+    payload.put("credit", 2);
+    payload.put("hours", 32);
+    payload.put("semester", "2099-1");
+    payload.put("schedule", "周二 1-2 节");
+    payload.put("location", "测试教室");
+    payload.put("capacity", 20);
+    payload.put("coverUrl", "/static/test.png");
+    payload.put("description", "课程状态测试");
+    return payload;
+  }
+
+  private boolean redisAvailable() {
+    try {
+      return "PONG".equals(
+          redis.execute(
+              (org.springframework.data.redis.core.RedisCallback<String>) connection -> connection.ping()));
+    } catch (RuntimeException ignored) {
+      return false;
+    }
   }
 
   @Test

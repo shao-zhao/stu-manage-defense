@@ -103,19 +103,11 @@ onMounted(load)
             clearable
             placeholder="按姓名或学号搜索"
             @keyup.enter="search"
-          /><el-select
-            v-model="query.status"
-            clearable
-            placeholder="账号状态"
-            @change="search"
+          /><el-select v-model="query.status" clearable placeholder="账号状态" @change="search"
             ><el-option label="正常" value="ENABLED" /><el-option
               label="冻结"
               value="FROZEN" /><el-option label="暂停" value="SUSPENDED" /></el-select
-          ><el-button
-            type="primary"
-            @click="search"
-            >查询</el-button
-          >
+          ><el-button type="primary" @click="search">查询</el-button>
         </div>
       </div>
       <el-table :data="records" v-loading="loading" stripe

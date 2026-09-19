@@ -5,6 +5,8 @@ import com.example.stubackend.web.ApiException;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.*;
+import javax.sql.DataSource;
+import org.springframework.boot.SpringBootVersion;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -19,11 +21,14 @@ public class SchoolService {
   private final BCryptPasswordEncoder bcrypt = new BCryptPasswordEncoder();
   private final EventHub events;
   private final StringRedisTemplate redis;
+  private final DataSource dataSource;
 
-  public SchoolService(JdbcTemplate db, EventHub events, StringRedisTemplate redis) {
+  public SchoolService(
+      JdbcTemplate db, EventHub events, StringRedisTemplate redis, DataSource dataSource) {
     this.db = db;
     this.events = events;
     this.redis = redis;
+    this.dataSource = dataSource;
   }
 
   public void verifySession(CurrentUser u) {
@@ -226,7 +231,7 @@ public class SchoolService {
   }
 
   public List<Map<String, Object>> courses(
-      CurrentUser u, String keyword, String semester, boolean mine) {
+      CurrentUser u, String keyword, String semester, String status, boolean mine) {
     String q =
         "select c.*,a.name teacher_name from course c join account a on a.id=c.teacher_id where"
             + " 1=1";
@@ -235,7 +240,8 @@ public class SchoolService {
       q += " and c.teacher_id=?";
       p.add(u.id());
     } else if (u.is("STUDENT")) {
-      q += " and c.status='PUBLISHED'";
+      // 停开课程仍要让学生看到，才能保留已选课程和历史成绩的上下文。
+      q += " and c.status in ('PUBLISHED','CLOSED')";
     }
     if (mine && u.is("STUDENT")) {
       q +=
@@ -251,6 +257,13 @@ public class SchoolService {
     if (semester != null && !semester.isBlank()) {
       q += " and c.semester=?";
       p.add(semester);
+    }
+    if (status != null && !status.isBlank()) {
+      if (!List.of("UNPUBLISHED", "PUBLISHED", "CLOSED").contains(status)) {
+        throw new ApiException(400, "课程状态无效");
+      }
+      q += " and c.status=?";
+      p.add(status);
     }
     List<Map<String, Object>> out = courseRows(q + " order by c.id desc", p.toArray());
     if (u.is("STUDENT"))
@@ -268,15 +281,13 @@ public class SchoolService {
 
   @Transactional
   public Map<String, Object> saveCourse(CurrentUser u, Map<String, Object> x, Long id) {
-    double credit = decimal(x, "credit", 1);
-    int hours = num(x, "hours", 16), capacity = num(x, "capacity", 30);
-    if (credit <= 0 || hours <= 0 || capacity <= 0) throw new ApiException(400, "学分、课时和容量必须为正数");
     if (id == null) {
+      double credit = decimal(x, "credit", 1);
+      int hours = num(x, "hours", 16);
+      int capacity = num(x, "capacity", 30);
+      validateCourseNumbers(credit, hours, capacity);
       long teacher = u.is("TEACHER") ? u.id() : longNum(x, "teacherId");
-      Map<String, Object> teacherAccount =
-          one("select role,status from account where id=?", teacher);
-      if (!"TEACHER".equals(teacherAccount.get("role"))
-          || !"ENABLED".equals(teacherAccount.get("status"))) throw new ApiException(400, "授课教师无效");
+      validateTeacher(teacher);
       long nid =
           insert(
               "insert into"
@@ -293,16 +304,31 @@ public class SchoolService {
               capacity,
               opt(x, "coverUrl", null),
               opt(x, "description", null));
+      after("refresh", Map.of("courseId", nid));
       return course(nid);
     }
-    Map<String, Object> c = one("select * from course where id=?", id);
+    // 编辑与发布/选课共用课程行锁，避免前端同时操作时绕过状态和容量约束。
+    Map<String, Object> c = one("select * from course where id=? for update", id);
     owner(u, c);
-    if (!"UNPUBLISHED".equals(c.get("status"))) throw new ApiException(400, "课程发布后不能编辑");
+    if (!"UNPUBLISHED".equals(c.get("status"))) {
+      updateCourseDescription(x, id, c);
+      after("refresh", Map.of("courseId", id));
+      return course(id);
+    }
+
+    double credit = decimal(x, "credit", number(c, "credit").doubleValue());
+    int hours = num(x, "hours", number(c, "hours").intValue());
+    int capacity = num(x, "capacity", number(c, "capacity").intValue());
+    validateCourseNumbers(credit, hours, capacity);
+    long teacher = courseTeacher(u, x, c);
+    validateTeacher(teacher);
     db.update(
         "update course set"
-            + " name=?,credit=?,hours=?,semester=?,schedule_text=?,location=?,capacity=?,cover_url=?,description=?"
+            + " code=?,name=?,teacher_id=?,credit=?,hours=?,semester=?,schedule_text=?,location=?,capacity=?,cover_url=?,description=?"
             + " where id=?",
+        required(x, "code"),
         required(x, "name"),
+        teacher,
         credit,
         hours,
         required(x, "semester"),
@@ -312,14 +338,57 @@ public class SchoolService {
         opt(x, "coverUrl", null),
         opt(x, "description", null),
         id);
+    after("refresh", Map.of("courseId", id));
     return course(id);
   }
 
   @Transactional
   public void publishCourse(CurrentUser u, long id) {
-    Map<String, Object> c = one("select * from course where id=?", id);
+    Map<String, Object> c = one("select * from course where id=? for update", id);
     owner(u, c);
     if (!"UNPUBLISHED".equals(c.get("status"))) throw new ApiException(400, "课程已发布");
+    db.update("update course set status='PUBLISHED' where id=?", id);
+    after("refresh", Map.of("courseId", id));
+  }
+
+  @Transactional
+  public void deleteCourse(CurrentUser u, long id) {
+    Map<String, Object> c = one("select * from course where id=? for update", id);
+    owner(u, c);
+    if (!"UNPUBLISHED".equals(c.get("status"))) {
+      throw new ApiException(400, "只有未发布课程可以删除");
+    }
+    long enrollments = db.queryForObject("select count(*) from enrollment where course_id=?", Long.class, id);
+    long grades = db.queryForObject("select count(*) from grade where course_id=?", Long.class, id);
+    long media = db.queryForObject("select count(*) from media where course_id=?", Long.class, id);
+    if (enrollments + grades + media > 0) {
+      throw new ApiException(400, "课程已有选课、成绩或资料关联，不能删除");
+    }
+    db.update("delete from course where id=?", id);
+    after("refresh", Map.of("courseId", id));
+  }
+
+  @Transactional
+  public void closeCourse(CurrentUser u, long id) {
+    Map<String, Object> c = one("select * from course where id=? for update", id);
+    owner(u, c);
+    if (!"PUBLISHED".equals(c.get("status"))) {
+      throw new ApiException(400, "只有已发布课程可以停止选课");
+    }
+    db.update("update course set status='CLOSED' where id=?", id);
+    after("refresh", Map.of("courseId", id));
+  }
+
+  @Transactional
+  public void reopenCourse(CurrentUser u, long id) {
+    Map<String, Object> c = one("select * from course where id=? for update", id);
+    owner(u, c);
+    if (!"CLOSED".equals(c.get("status"))) {
+      throw new ApiException(400, "课程当前不是停开状态");
+    }
+    if (!"DRAFT".equals(c.get("grade_status"))) {
+      throw new ApiException(400, "成绩已进入流程，不能重新开放选课");
+    }
     db.update("update course set status='PUBLISHED' where id=?", id);
     after("refresh", Map.of("courseId", id));
   }
@@ -329,19 +398,23 @@ public class SchoolService {
     if (!u.is("STUDENT")) throw new ApiException(403, "仅学生可选退课");
     Map<String, Object> s = one("select * from student where account_id=?", u.id());
     Map<String, Object> c = one("select * from course where id=? for update", courseId);
-    if (!"PUBLISHED".equals(c.get("status"))) throw new ApiException(400, "课程尚未发布");
     List<Map<String, Object>> es =
         rows(
             "select * from enrollment where course_id=? and student_id=? for update",
             courseId,
             s.get("id"));
     if (withdraw) {
+      // 停开只阻止新增选课；在成绩草稿期仍允许已选学生退出。
+      if (!List.of("PUBLISHED", "CLOSED").contains(c.get("status"))) {
+        throw new ApiException(400, "课程当前不能退课");
+      }
       if (es.isEmpty() || !"ENROLLED".equals(es.get(0).get("status")))
         throw new ApiException(400, "没有可退的选课记录");
       if (!"DRAFT".equals(c.get("grade_status"))) throw new ApiException(400, "成绩已提交，不能退课");
       db.update("update enrollment set status='WITHDRAWN' where id=?", es.get(0).get("id"));
       db.update("update course set enrolled=enrolled-1 where id=?", courseId);
     } else {
+      if (!"PUBLISHED".equals(c.get("status"))) throw new ApiException(400, "课程当前不能选课");
       if ("SUSPENDED".equals(one("select status from account where id=?", u.id()).get("status")))
         throw new ApiException(403, "停学学生不能选课");
       if (!"DRAFT".equals(c.get("grade_status"))) throw new ApiException(400, "成绩已进入流程，不能新增选课");
@@ -624,22 +697,28 @@ public class SchoolService {
     List<Map<String, Object>> creditsByDepartment = List.of();
     List<Map<String, Object>> gradeDistribution;
     List<Map<String, Object>> courseEnrollment;
+    // 不按别名分组，避免 MySQL 将 name 误解析为 course.name；兼容 ONLY_FULL_GROUP_BY。
+    String scoreBucket =
+        "case when g.score>=90 then '90-100' when g.score>=80 then '80-89' when g.score>=70"
+            + " then '70-79' when g.score>=60 then '60-69' else '不及格' end";
     String distributionSql =
-        "select case when g.score>=90 then '90-100' when g.score>=80 then '80-89' when g.score>=70"
-            + " then '70-79' when g.score>=60 then '60-69' else '不及格' end name,count(*) value from"
-            + " grade g join course c on c.id=g.course_id where c.grade_status='PUBLISHED'";
+        "select "
+            + scoreBucket
+            + " name,count(*) value from grade g join course c on c.id=g.course_id where"
+            + " c.grade_status='PUBLISHED'";
     if (u.is("ADMIN")) {
       creditsByDepartment =
           rows(
-              "select department name,coalesce(sum(earned_credits),0) value from student group by"
-                  + " department");
-      gradeDistribution = rows(distributionSql + " group by name");
+              "select s.department name,coalesce(sum(s.earned_credits),0) value from student s"
+                  + " group by s.department");
+      gradeDistribution = rows(distributionSql + " group by " + scoreBucket);
       courseEnrollment =
           rows(
               "select name,enrolled value,capacity from course where status='PUBLISHED' order by"
                   + " enrolled desc limit 8");
     } else if (u.is("TEACHER")) {
-      gradeDistribution = rows(distributionSql + " and c.teacher_id=? group by name", u.id());
+      gradeDistribution =
+          rows(distributionSql + " and c.teacher_id=? group by " + scoreBucket, u.id());
       courseEnrollment =
           rows(
               "select name,enrolled value,capacity from course where teacher_id=? order by enrolled"
@@ -650,7 +729,8 @@ public class SchoolService {
           rows(
               distributionSql
                   + " and exists(select 1 from student s where s.id=g.student_id and"
-                  + " s.account_id=?) group by name",
+                  + " s.account_id=?) group by "
+                  + scoreBucket,
               u.id());
       courseEnrollment = List.of();
     }
@@ -698,6 +778,7 @@ public class SchoolService {
             new org.springframework.transaction.support.TransactionSynchronization() {
               public void afterCommit() {
                 try {
+                  // 只能在事务提交后驱逐缓存：回滚的选课或成绩不能让页面读到不存在的变化。
                   Set<String> keys = redis.keys("stu_manage:dashboard:*");
                   if (keys != null && !keys.isEmpty()) redis.delete(keys);
                 } catch (Exception ignored) {
@@ -705,6 +786,117 @@ public class SchoolService {
                 events.send(event, data);
               }
             });
+  }
+
+  public Map<String, Object> systemStatus() {
+    Map<String, Object> database = new LinkedHashMap<>();
+    try (var connection = dataSource.getConnection()) {
+      var metadata = connection.getMetaData();
+      database.put("status", "UP");
+      database.put("product", metadata.getDatabaseProductName());
+      database.put("version", metadata.getDatabaseProductVersion());
+    } catch (Exception ignored) {
+      database.put("status", "DOWN");
+    }
+
+    Map<String, Object> redisStatus = new LinkedHashMap<>();
+    try {
+      String reply =
+          redis.execute(
+              (org.springframework.data.redis.core.RedisCallback<String>)
+                  connection -> connection.ping());
+      redisStatus.put("status", "PONG".equalsIgnoreCase(reply) ? "UP" : "DOWN");
+    } catch (Exception ignored) {
+      redisStatus.put("status", "DOWN");
+    }
+
+    return Map.of(
+        "database",
+        database,
+        "redis",
+        redisStatus,
+        "app",
+        Map.of(
+            "javaVersion",
+            System.getProperty("java.version"),
+            "springBootVersion",
+            SpringBootVersion.getVersion()));
+  }
+
+  private void updateCourseDescription(Map<String, Object> x, long id, Map<String, Object> course) {
+    rejectLockedCourseChanges(x, course);
+    db.update(
+        "update course set location=?,description=?,cover_url=? where id=?",
+        valueOrCurrent(x, "location", course.get("location")),
+        valueOrCurrent(x, "description", course.get("description")),
+        valueOrCurrent(x, "coverUrl", course.get("cover_url")),
+        id);
+  }
+
+  private void rejectLockedCourseChanges(Map<String, Object> x, Map<String, Object> course) {
+    Map<String, Object> locked =
+        Map.of(
+            "code", course.get("code"),
+            "name", course.get("name"),
+            "teacherId", course.get("teacher_id"),
+            "credit", course.get("credit"),
+            "hours", course.get("hours"),
+            "semester", course.get("semester"),
+            "schedule", course.get("schedule_text"),
+            "capacity", course.get("capacity"));
+    for (Map.Entry<String, Object> entry : locked.entrySet()) {
+      if (x.containsKey(entry.getKey()) && !sameValue(x.get(entry.getKey()), entry.getValue())) {
+        throw new ApiException(400, "课程已发布，不能修改" + entry.getKey());
+      }
+    }
+  }
+
+  private boolean sameValue(Object requested, Object stored) {
+    if (requested == null || stored == null) return requested == stored;
+    if (requested instanceof Number || stored instanceof Number) {
+      try {
+        return new java.math.BigDecimal(String.valueOf(requested))
+                .compareTo(new java.math.BigDecimal(String.valueOf(stored)))
+            == 0;
+      } catch (NumberFormatException ignored) {
+        return false;
+      }
+    }
+    return String.valueOf(requested).equals(String.valueOf(stored));
+  }
+
+  private Object valueOrCurrent(Map<String, Object> x, String key, Object current) {
+    return x.containsKey(key) ? x.get(key) : current;
+  }
+
+  private long courseTeacher(CurrentUser u, Map<String, Object> x, Map<String, Object> course) {
+    long current = number(course, "teacher_id").longValue();
+    if (u.is("TEACHER")) {
+      if (x.containsKey("teacherId") && longNum(x, "teacherId") != current) {
+        throw new ApiException(403, "教师不能转让本人课程");
+      }
+      return current;
+    }
+    return x.containsKey("teacherId") ? longNum(x, "teacherId") : current;
+  }
+
+  private void validateTeacher(long teacherId) {
+    Map<String, Object> account = one("select role,status from account where id=?", teacherId);
+    if (!"TEACHER".equals(account.get("role")) || !"ENABLED".equals(account.get("status"))) {
+      throw new ApiException(400, "授课教师无效");
+    }
+  }
+
+  private void validateCourseNumbers(double credit, int hours, int capacity) {
+    if (credit <= 0 || hours <= 0 || capacity <= 0) {
+      throw new ApiException(400, "学分、课时和容量必须为正数");
+    }
+  }
+
+  private Number number(Map<String, Object> x, String key) {
+    Object value = x.get(key);
+    if (!(value instanceof Number)) throw new ApiException(400, key + " 必须是数字");
+    return (Number) value;
   }
 
   private Map<String, Object> stat(String label, Object value, String suffix) {

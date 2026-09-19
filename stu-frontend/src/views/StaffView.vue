@@ -83,11 +83,7 @@ onMounted(load)
             clearable
             placeholder="按姓名或账号搜索"
             @keyup.enter="search"
-          /><el-button
-            type="primary"
-            @click="search"
-            >查询</el-button
-          >
+          /><el-button type="primary" @click="search">查询</el-button>
         </div>
       </div>
       <el-table :data="records" v-loading="loading" stripe

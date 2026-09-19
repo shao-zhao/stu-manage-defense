@@ -48,7 +48,7 @@ export interface Course {
   location: string
   capacity: number
   enrolled: number
-  status: 'UNPUBLISHED' | 'PUBLISHED'
+  status: 'UNPUBLISHED' | 'PUBLISHED' | 'CLOSED'
   coverUrl?: string
   description?: string
   gradeStatus?: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'PUBLISHED'
@@ -56,6 +56,7 @@ export interface Course {
   midtermWeight?: number
   finalWeight?: number
   myEnrollmentStatus?: string
+  hasRelatedRecords?: boolean
 }
 export interface Enrollment {
   id: number
@@ -105,4 +106,6 @@ export interface DashboardData {
   courseEnrollment: { name: string; value: number; capacity: number }[]
   recentActivities: { id: number; title: string; content: string; createdAt: string }[]
   cache: { backend: string; hit: boolean; ttlSeconds: number }
+  /** 后端生成本次 dashboard 数据的时间，和缓存元信息保持平级。 */
+  generatedAt?: string
 }

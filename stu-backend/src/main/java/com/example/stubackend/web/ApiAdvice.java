@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiAdvice {
@@ -19,6 +20,11 @@ public class ApiAdvice {
   @ExceptionHandler(ApiException.class)
   ResponseEntity<Result<Void>> api(ApiException e) {
     return ResponseEntity.status(e.status()).body(Result.fail(e.getMessage()));
+  }
+
+  @ExceptionHandler(NoResourceFoundException.class)
+  ResponseEntity<Result<Void>> resourceMissing(NoResourceFoundException ignored) {
+    return ResponseEntity.status(404).body(Result.fail("资源不存在"));
   }
 
   @ExceptionHandler(Exception.class)

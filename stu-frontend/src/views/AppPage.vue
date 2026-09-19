@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { api } from '@/util/request'
+import { api, apiUrl } from '@/util/request'
 import { ElMessage } from 'element-plus'
 import {
   Bell,
@@ -15,6 +15,7 @@ import {
   Reading,
   School,
   Setting,
+  Connection,
   User,
   UserFilled,
 } from '@element-plus/icons-vue'
@@ -22,6 +23,7 @@ const auth = useAuthStore()
 const router = useRouter()
 const collapsed = ref(false)
 const unread = ref(0)
+const sseStatus = ref<'connecting' | 'connected' | 'reconnecting' | 'disconnected'>('connecting')
 let aborter: AbortController | undefined
 let reconnectTimer: number | undefined
 let reconnectAttempts = 0
@@ -33,6 +35,7 @@ const menus = computed(() => [
     ? [
         { path: '/students', label: '学生管理', icon: UserFilled },
         { path: '/staff', label: '教职工管理', icon: UserFilled },
+        { path: '/technology', label: '技术演示', icon: Connection },
       ]
     : []),
   {
@@ -59,15 +62,14 @@ async function logout() {
 async function startEvents() {
   if (!eventsEnabled || !localStorage.getItem('stu_manage_token')) return
   aborter = new AbortController()
+  sseStatus.value = reconnectAttempts ? 'reconnecting' : 'connecting'
   try {
-    const response = await fetch(
-      `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:9090'}/api/events`,
-      {
-        headers: { Authorization: `Bearer ${localStorage.getItem('stu_manage_token')}` },
-        signal: aborter.signal,
-      },
-    )
+    const response = await fetch(apiUrl('/api/events'), {
+      headers: { Authorization: `Bearer ${localStorage.getItem('stu_manage_token')}` },
+      signal: aborter.signal,
+    })
     if (!response.ok || !response.body) throw new Error('通知连接未建立')
+    sseStatus.value = 'connected'
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -75,6 +77,7 @@ async function startEvents() {
       const part = await reader.read()
       if (part.done) break
       buffer += decoder.decode(part.value, { stream: true })
+      // Spring SSE 可能使用 CRLF；按空行分隔事件，并对 event: 后的空格兼容处理。
       const events = buffer.replace(/\r\n/g, '\n').split('\n\n')
       buffer = events.pop() || ''
       events.forEach((event) => {
@@ -90,16 +93,17 @@ async function startEvents() {
         if (type === 'refresh') window.dispatchEvent(new CustomEvent('data-refresh'))
       })
     }
-    // The server may close an idle stream. Resume it while the layout is active.
+    // 服务端可能主动结束空闲流；布局仍在使用时建立下一条连接。
     if (eventsEnabled) reconnectTimer = window.setTimeout(startEvents, 1500)
     reconnectAttempts = 0
   } catch (error) {
     if ((error as DOMException).name === 'AbortError' || !eventsEnabled) return
-    // Network interruptions are expected for SSE. Retry a few times without disturbing the page.
+    // 网络短暂中断时有限重连，不打断用户当前页面操作。
     if (reconnectAttempts < 3) {
+      sseStatus.value = 'reconnecting'
       reconnectAttempts += 1
       reconnectTimer = window.setTimeout(startEvents, reconnectAttempts * 1500)
-    }
+    } else sseStatus.value = 'disconnected'
   }
 }
 function decrementUnread() {
@@ -119,6 +123,7 @@ onBeforeUnmount(() => {
   eventsEnabled = false
   aborter?.abort()
   if (reconnectTimer) window.clearTimeout(reconnectTimer)
+  sseStatus.value = 'disconnected'
   window.removeEventListener('notification-read', decrementUnread)
 })
 </script>
@@ -147,6 +152,18 @@ onBeforeUnmount(() => {
           ><el-icon><MenuIcon /></el-icon
         ></el-button>
         <div class="topbar-spacer" />
+        <span class="sse-state" :class="sseStatus" :title="`实时通知：${sseStatus}`"
+          ><i></i
+          >{{
+            sseStatus === 'connected'
+              ? '实时已连接'
+              : sseStatus === 'reconnecting'
+                ? '正在重连'
+                : sseStatus === 'connecting'
+                  ? '正在连接'
+                  : '实时已断开'
+          }}</span
+        >
         <el-badge :hidden="!unread" :value="unread" class="notice-badge"
           ><el-button text aria-label="通知中心" @click="router.push('/notifications')"
             ><el-icon :size="19"><Bell /></el-icon></el-button></el-badge
@@ -251,6 +268,30 @@ onBeforeUnmount(() => {
 .notice-badge {
   margin-right: 16px;
 }
+.sse-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sse-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a0aaa5;
+}
+.sse-state.connected {
+  color: #176346;
+}
+.sse-state.connected i {
+  background: #35a16f;
+}
+.sse-state.reconnecting i,
+.sse-state.connecting i {
+  background: #d79222;
+}
 .user-trigger {
   border: 0;
   background: none;
@@ -302,7 +343,8 @@ onBeforeUnmount(() => {
     padding: 18px 14px;
   }
   .user-name,
-  .user-trigger small {
+  .user-trigger small,
+  .sse-state {
     display: none;
   }
 }

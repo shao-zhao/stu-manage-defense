@@ -48,12 +48,19 @@ const router = createRouter({
         },
         { path: 'media', name: 'media', component: () => import('@/views/MediaView.vue') },
         { path: 'profile', name: 'profile', component: () => import('@/views/ProfileView.vue') },
+        {
+          path: 'technology',
+          name: 'technology',
+          component: () => import('@/views/TechnologyView.vue'),
+          meta: { roles: ['ADMIN'] satisfies Role[] },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
 })
 router.beforeEach(async (to) => {
+  // 路由守卫负责前端页面访问体验；接口权限仍由后端按令牌再次校验。
   const auth = useAuthStore()
   if (to.meta.public) return auth.isLoggedIn ? '/dashboard' : true
   if (!localStorage.getItem('stu_manage_token')) return '/login'
