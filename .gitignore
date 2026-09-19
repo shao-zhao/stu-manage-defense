@@ -22,3 +22,8 @@ uploads/
 .vscode/
 *.iml
 *.log
+
+# Offline-package build inputs/outputs (the reproducible templates are tracked)
+package/out/
+package/vendor/*.exe
+*.zip
